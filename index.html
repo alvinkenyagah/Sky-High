@@ -38,10 +38,27 @@
             text-shadow: 0 0 5px rgba(0, 255, 242, 0.5);
         }
 
+        .balance-container {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
         .balance {
             font-size: 1.2rem;
             font-weight: bold;
-            margin-bottom: 15px;
+        }
+
+        .timer-container {
+            display: none;
+            background-color: rgba(255, 87, 51, 0.8);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            margin-left: 10px;
         }
 
         #game-container {
@@ -164,10 +181,15 @@
     <!-- Add CryptoJS for simple encryption -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 </head>
-<body  oncontextmenu="return false;" onkeydown="if (event.ctrlKey && event.key === 'u') return false;">
+<body oncontextmenu="return false;" onkeydown="if (event.ctrlKey && event.key === 'u') return false;">
     <div class="container">
         <h1>Sky High Gamble</h1>
-        <p class="balance">Balance: $<span id="balance">500.00</span></p>
+        <div class="balance-container">
+            <p class="balance">Balance: $<span id="balance">500.00</span></p>
+            <div id="timer-container" class="timer-container">
+                Refill in: <span id="timer">00:00:00</span>
+            </div>
+        </div>
         
         <div id="game-container"></div>
         
@@ -202,7 +224,8 @@
             status: 'idle', // idle, flying, cashed, crashed
             startingBalance: 500, // Track the starting balance for validation
             startTime: null,
-            sessionId: null
+            sessionId: null,
+            nextRefillTime: null // New: Track when user can get next refill
         };
         
         // House edge and crash point
@@ -214,6 +237,10 @@
         let planeGroup, propeller;
         let frameId, gameLoopId;
         
+        // Timer variables
+        let timerInterval;
+        const REFILL_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
+        
         // DOM elements
         const gameContainer = document.getElementById('game-container');
         const balanceEl = document.getElementById('balance');
@@ -222,6 +249,8 @@
         const stakeInput = document.getElementById('stake');
         const playBtn = document.getElementById('play-btn');
         const cashoutBtn = document.getElementById('cashout-btn');
+        const timerContainer = document.getElementById('timer-container');
+        const timerEl = document.getElementById('timer');
         
         // Generate a unique session ID
         function generateSessionId() {
@@ -244,6 +273,11 @@
                     _gameState.status = 'idle';
                     _gameState.multiplier = 1.0;
                     updateUI();
+                    
+                    // Check if we need to start the timer
+                    if (_gameState.balance <= 0 && _gameState.nextRefillTime) {
+                        startRefillTimer();
+                    }
                 } else {
                     // If validation fails, reset to initial state
                     console.log("Invalid saved state detected, resetting game");
@@ -265,6 +299,7 @@
             _gameState.status = 'idle';
             _gameState.startingBalance = 500;
             _gameState.startTime = Date.now();
+            _gameState.nextRefillTime = null;
             // Keep the session ID
         }
         
@@ -280,7 +315,65 @@
                 playBtn.classList.remove('reset');
                 cashoutBtn.classList.add('disabled');
                 messageEl.textContent = 'Place your bet and press PLAY!';
+                
+                // Disable play button if balance is 0 and timer is running
+                if (_gameState.balance <= 0) {
+                    playBtn.classList.add('disabled');
+                    messageEl.textContent = 'Waiting for balance refill...';
+                } else {
+                    playBtn.classList.remove('disabled');
+                }
             }
+        }
+        
+        // Start refill timer
+        function startRefillTimer() {
+            // Clear any existing timer
+            if (timerInterval) {
+                clearInterval(timerInterval);
+            }
+            
+            // If no next refill time is set, set it now
+            if (!_gameState.nextRefillTime) {
+                _gameState.nextRefillTime = Date.now() + REFILL_INTERVAL;
+                saveGameState();
+            }
+            
+            // Show timer container
+            timerContainer.style.display = 'block';
+            
+            // Update timer immediately
+            updateTimer();
+            
+            // Set interval to update timer every second
+            timerInterval = setInterval(() => {
+                updateTimer();
+            }, 1000);
+        }
+        
+        // Update timer display
+        function updateTimer() {
+            const now = Date.now();
+            const timeLeft = Math.max(0, _gameState.nextRefillTime - now);
+            
+            if (timeLeft <= 0) {
+                // Time's up! Refill balance
+                clearInterval(timerInterval);
+                _gameState.balance = 500;
+                _gameState.nextRefillTime = null;
+                timerContainer.style.display = 'none';
+                updateUI();
+                saveGameState();
+                messageEl.textContent = 'Balance refilled! Good luck!';
+                return;
+            }
+            
+            // Format time for display (HH:MM:SS)
+            const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+            const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+            
+            timerEl.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
         
         // Encrypt game state for storage
@@ -307,7 +400,8 @@
                 balance: state.balance,
                 startingBalance: state.startingBalance,
                 sessionId: state.sessionId,
-                startTime: state.startTime
+                startTime: state.startTime,
+                nextRefillTime: state.nextRefillTime
             });
             return CryptoJS.SHA256(stateStr + SECRET_KEY).toString();
         }
@@ -357,6 +451,16 @@
             }
             
             return true;
+        }
+        
+        // Check if balance is zero and start timer if needed
+        function checkBalance() {
+            if (_gameState.balance <= 0 && !_gameState.nextRefillTime) {
+                // Set next refill time
+                _gameState.nextRefillTime = Date.now() + REFILL_INTERVAL;
+                saveGameState();
+                startRefillTimer();
+            }
         }
         
         // Initialize Three.js scene
@@ -462,7 +566,7 @@
             
             renderer.render(scene, camera);
         }
-        
+     
         // Generate crash point with house edge
         function generateCrashPoint() {
             const random = Math.random();
@@ -470,16 +574,29 @@
             // Apply house edge
             if (random < HOUSE_EDGE) {
                 // Early crash (house wins)
-                return 1.0 + (random * 0.5);
+                // Most crashes occur below 2x
+                return 1.0 + (random * 1.0);
             } else {
-                // Better odds for player
-                return 1.5 + (random * 8.5); // Can go up to 10x
+                // Better odds for player (20% of the time)
+                // Create a more varied distribution with occasional high multipliers
+                const playerLuck = Math.random();
+                
+                if (playerLuck < 0.6) {
+                    // 60% of the 20% (so 12% overall) will be between 2-4x
+                    return 2.0 + (playerLuck * 2.0);
+                } else if (playerLuck < 0.9) {
+                    // 30% of the 20% (so 6% overall) will be between 4-8x
+                    return 4.0 + (Math.random() * 4.0);
+                } else {
+                    // 10% of the 20% (so 2% overall) will be between 8-20x
+                    return 8.0 + (Math.random() * 12.0);
+                }
             }
         }
         
         // Start the game
         function startGame() {
-            if (_gameState.status !== 'idle') return;
+            if (_gameState.status !== 'idle' || _gameState.balance <= 0) return;
             
             const stakeAmount = parseFloat(stakeInput.value);
             if (isNaN(stakeAmount) || stakeAmount <= 0 || stakeAmount > _gameState.balance) {
@@ -559,6 +676,9 @@
                     messageEl.textContent = `Plane flew away at ${crashPoint.toFixed(2)}x!`;
                     cashoutBtn.classList.add('disabled');
                     
+                    // Check if balance is zero and start timer if needed
+                    checkBalance();
+                    
                     // Save state after crash
                     saveGameState();
                     
@@ -627,11 +747,18 @@
             multiplierEl.textContent = '1.00';
             messageEl.textContent = 'Place your bet and press PLAY!';
             
+            // Check if balance is zero and start timer if needed
+            checkBalance();
+            
             // Update buttons
             playBtn.textContent = 'PLAY';
             playBtn.classList.remove('reset');
             playBtn.classList.add('play');
             cashoutBtn.classList.add('disabled');
+            
+            if (_gameState.balance <= 0) {
+                playBtn.classList.add('disabled');
+            }
             
             // Save state after reset
             saveGameState();
@@ -646,6 +773,11 @@
         
         // Event listeners
         playBtn.addEventListener('click', () => {
+            if (_gameState.balance <= 0) {
+                messageEl.textContent = 'Wait for balance refill to play.';
+                return;
+            }
+            
             if (_gameState.status === 'idle') {
                 startGame();
             } else {
@@ -660,6 +792,11 @@
         window.addEventListener('DOMContentLoaded', () => {
             initGameState();
             initScene();
+            
+            // Check if we need to start the timer immediately
+            if (_gameState.balance <= 0 && _gameState.nextRefillTime) {
+                startRefillTimer();
+            }
         });
     </script>
 </body>
